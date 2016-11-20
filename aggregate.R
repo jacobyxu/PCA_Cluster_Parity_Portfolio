@@ -136,7 +136,7 @@ rankOfMarket <- USfinal %>% filter(Date == max(Date)) %>%
   arrange(desc(Market.Cap))
 
 ######################### choose how many tickers
-nTickets <- 200
+nTickets <- 100
 ticketChoice <- rankOfMarket$Ticker[1:nTickets]
 USfinal <- USfinal %>% filter(Ticker %in% ticketChoice) %>% 
   select(-Market.Cap) %>% arrange(Date)
@@ -176,7 +176,7 @@ for (i in startDate:endDate){
   trainset <- USReturn[1:(i-1),]
   
   ################### Clustering
-  numCluster <- 40
+  numCluster <- 20
   clusterIteNum <- 500
   clusterResult <- clustering(trainset, numCluster, clusterIteNum)
   orderClusters <- clusterResult[[1]]
