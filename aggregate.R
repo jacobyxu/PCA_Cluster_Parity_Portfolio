@@ -1,9 +1,140 @@
+library(Hmisc); library(xlsx); library(dplyr); 
+library(gtable); library(ggplot2); library(data.table)
+
+clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.999){
+  
+  ############################################ derive cor & cov
+  UScorMatrix <- cor(dataset[,-1], use = "pairwise.complete.obs")
+  UScovMatrix <- cov(dataset[,-1], use = "pairwise.complete.obs")
+  
+  ################# remove NAs for cor
+  delete <- c()
+  i <- 1
+  for (col in 1:ncol(UScorMatrix)){
+    if(sum(is.na(UScorMatrix[,col])) == nrow(UScorMatrix)){
+      delete[i] <- col
+      i = i+1 }}
+  UScorMatrix <- UScorMatrix[-(delete),-(delete)]
+  for (col in 1:ncol(UScorMatrix)){
+    for (row in 1:nrow(UScorMatrix)){
+      if (is.na(UScorMatrix[row,col]))
+        UScorMatrix[row,col] <- 0 }}
+  
+  ################## remove NAs for cov
+  delete <- c()
+  i <- 1
+  for (col in 1:ncol(UScovMatrix)){
+    if(sum(is.na(UScovMatrix[,col])) == nrow(UScovMatrix)){
+      delete[i] <- col
+      i = i+1 }}
+  UScovMatrix <- UScovMatrix[-(delete),-(delete)]
+  for (col in 1:ncol(UScovMatrix)){
+    for (row in 1:nrow(UScovMatrix)){
+      if (is.na(UScovMatrix[row,col]))
+        UScovMatrix[row,col] <- 0 }}
+  
+  ################## normalize the cov Matrix
+  #  outlierLine <- as.numeric(quantile(UScovMatrix,removeOutliers))
+  #  maxcov <- max(UScovMatrix, na.rm = TRUE)
+  #  mincov <- min(UScovMatrix, na.rm = TRUE)
+  #  normalcovMatrix <- (UScovMatrix - mincov) / (outlierLine - mincov)
+  #  for (i in 1:NROW(normalcovMatrix)){
+  #    for (j in 1:NCOL(normalcovMatrix)){
+  #      if (normalcovMatrix[i,j] > 1){
+  #        normalcovMatrix[i,j] <- 1
+  #  }}}
+  
+  ################# change the data storage type
+  corDataFrame <- data.frame(UScorMatrix)
+  covDataFrame <- data.frame(UScovMatrix)
+  #  covDataFrame <- data.frame(normalcovMatrix)
+  
+  ########################################## derive matrix for clustering
+  
+  for (i in 1:nrow(corDataFrame)){
+    for (j in 1:ncol(corDataFrame)){
+      corDataFrame[i,j] <- sqrt((1 - corDataFrame[i,j])/2)
+    }}
+  
+  ######################################### PCA to choose initial centers
+  pca.model <- prcomp(corDataFrame, center = FALSE, scale. = TRUE) 
+  Rotation <- pca.model[2]
+  pca.rotation1 <- Rotation[[1]][,1]
+  positivePC <- pca.rotation1[order(abs(pca.rotation1), decreasing = TRUE)]
+  centersNames <- names(positivePC[1:numCluster])
+  
+  ########################################## Clustering
+  kcenters <- corDataFrame[centersNames, ]
+  set.seed(2016)
+  
+  ###################### plot heatmap by ggplot
+  #  corDataFramePlot <- corDataFrame
+  #  corDataFramePlot$Name <- row.names(corDataFramePlot)
+  #  corDataFrame.m <- melt(corDataFramePlot)
+  #flush.console()
+  #  g <- ggplot(data = corDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
+  #    theme(axis.text = element_blank(), axis.title = element_blank())+
+  #      scale_fill_gradient(low = "white", high = "red")
+  #  print(g)
+  #  Sys.sleep(.09)
+  
+  ###################### Clustering
+  #  for (i in 1:clusterIteNum){
+  
+  #    corCluster <- kmeans(corDataFrame, centers=kcenters, iter.max=1)
+  #    kcenters <- data.frame(corCluster$centers)
+  
+  ####################### reorder matrix
+  #    orderCluster <- corCluster$cluster[order(corCluster$cluster)]
+  #    nameList <- names(orderCluster)
+  #    newCorDataFrame <- corDataFrame[nameList,nameList]
+  
+  #    if (i == clusterIteNum){
+  ###################### plot heatmap
+  #      newCorDataFrame$Name <- row.names(newCorDataFrame)
+  #      newCorDataFrame.m <- melt(newCorDataFrame)
+  #flush.console()
+  #      g <- ggplot(data = newCorDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
+  #        theme(axis.text = element_blank(), axis.title = element_blank())
+  #      print(g)
+  #      Sys.sleep(.09)
+  #    }}
+  ###################### inital heatmap
+  tmap1 <- as.matrix(corDataFrame)
+  map1 <- t(tmap1)
+  
+  ###################### clustering
+  corCluster <- kmeans(corDataFrame, centers=kcenters, iter.max=clusterIteNum)
+  kcenters <- data.frame(corCluster$centers)
+  
+  ####################### reorder matrix and heatmap
+  orderCluster <- corCluster$cluster[order(corCluster$cluster)]
+  clusterSize <- corCluster$size
+  nameList <- names(orderCluster)
+  newCorDataFrame <- corDataFrame[nameList,]
+  newCorDataFrame <- newCorDataFrame[,nameList]
+  tmap2 <- as.matrix(newCorDataFrame)
+  map2 <- t(tmap2)
+  
+  #   ####################### plot heatmap by ggplot
+  #    newCorDataFrame$Name <- nameList #row.names(newCorDataFrame)
+  #    newCorDataFrame.m <- melt(newCorDataFrame)
+  #flush.console()
+  #    g <- ggplot(data = newCorDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
+  #        theme(axis.text = element_blank(), axis.title = element_blank())+
+  #      scale_fill_gradient(low = "white", high = "red")
+  #    print(g)
+  
+  return(list(orderCluster,clusterSize,map1, map2))
+}
+
+
 load("USfinal.RData")
 rankOfMarket <- USfinal %>% filter(Date == max(Date)) %>% 
   arrange(desc(Market.Cap))
 
 ######################### choose how many tickers
-nTickets <- 200
+nTickets <- 100
 ticketChoice <- rankOfMarket$Ticker[1:nTickets]
 USfinal <- USfinal %>% filter(Ticker %in% ticketChoice) %>% 
   select(-Market.Cap) %>% arrange(Date)
@@ -25,7 +156,7 @@ beginning <- min(USReturn$USOutTime) + as.Date('1899-12-30')
 
 
 
-
+##################################################### test
 
 library(caret)
 library(stats)
@@ -42,7 +173,7 @@ for (i in startDate:endDate){
   trainset <- USReturn[1:(i-1),]
   
   ################### Clustering
-  numCluster <- 40
+  numCluster <- 20
   clusterIteNum <- 500
   clusterResult <- clustering(trainset, numCluster, clusterIteNum)
   orderClusters <- clusterResult[[1]]
@@ -91,5 +222,7 @@ for (i in startDate:endDate){
   ################## plot
   time <- (startDate-1):i
   plot(time,historyValue,type = 'l')
-  Sys.sleep(.01)
+  title(main = paste0(as.character(nTickets), " equities, in ",
+                      as.character(numCluster), " clusters"))
+  Sys.sleep(.001)
 }

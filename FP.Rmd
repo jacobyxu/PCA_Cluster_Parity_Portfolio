@@ -284,7 +284,9 @@ for (i in startDate:endDate){
   ################## plot
   time <- (startDate-1):i
   plot(time,historyValue,type = 'l')
-  Sys.sleep(.01)
+  title(main = paste0(as.character(nTickets), " equities, in ",
+                      as.character(numCluster), " clusters"))
+  Sys.sleep(.001)
 }
 ```
 
