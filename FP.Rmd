@@ -236,7 +236,7 @@ for (i in startDate:endDate){
   trainset <- USReturn[1:(i-1),]
   
   ################### Clustering
-  numCluster <- 40
+  numCluster <- 30
   clusterIteNum <- 500
   clusterResult <- clustering(trainset, numCluster, clusterIteNum)
   orderClusters <- clusterResult[[1]]
@@ -275,46 +275,98 @@ for (i in startDate:endDate){
   #  }
   
   ################### change the portfolio 3
-  ## little difference from paper
+  ## real reasonable portfolio
   covDataFrame <- clusterResult[[3]]
   portfolio[1,] <- 0
   
   ##### calculate weights across clusters by variance of clusters
   V_piaoList <- c()
-  for (clusters in 1:numCluster){
-    equityInCluster <- names(orderClusters[orderClusters == clusters])
-    covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
-    if (nrow(covMatrixInCluster) > 1)
-    {diagCovMatrix <- diag(diag(covMatrixInCluster))}else{
-      diagCovMatrix <-covMatrixInCluster}
-    inverseDiagCovMatrix <- solve(diagCovMatrix)
-    w_piao <- diag(inverseDiagCovMatrix) / tr(inverseDiagCovMatrix)
-    V_piao <- as.numeric(crossprod(w_piao,covMatrixInCluster) %*% w_piao)
+  for (clustera in 1:numCluster){
+    ## for each cluster, calculate the distribution of portfolio to get minimum cluster variance
+    equityInCluster <- names(orderClusters[orderClusters == clustera])
+    aalpha <- as.vector(rep(1,length(equityInCluster)))
+    if (length(equityInCluster) > 1){
+      covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
+      divider <- as.numeric(aalpha %*% 
+                              solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster)))) 
+                            %*% aalpha)
+      wInCluster <- t(solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                      %*% aalpha / divider)
+      V_piao <- as.numeric(wInCluster %*% covMatrixInCluster %*% t(wInCluster))
+    }
+    ### Inf for delete outlier
+    else{
+      V_piao <- Inf#as.numeric(covDataFrame[equityInCluster,equityInCluster])
+    }
     V_piaoList <- c(V_piaoList,V_piao)
   }
+  
+  ## distribute weights across clusters
   wAcrossCluster <- 1 / V_piaoList / sum(1 / V_piaoList)
-
-  ##### calculate weights in each clusters by variance of equities
+    
+  ##### calculate weights in each clusters by covariance matrix of equities
   for (clustera in 1:numCluster){
     clusterW <- wAcrossCluster[clustera]
+      
+    ## for each cluster, calculate the distribution of portfolio to get minimum cluster variance
     equityInCluster <- names(orderClusters[orderClusters == clustera])
+    aalpha <- as.vector(rep(1,length(equityInCluster)))
+    
     if (length(equityInCluster) > 1){
-      varianceVectorInCluster <- diag(as.matrix(covDataFrame[equityInCluster,equityInCluster]))
-      wInCluster <- 1 / varianceVectorInCluster / sum(1 / varianceVectorInCluster)
-      totalWListInCluster <- clusterW * wInCluster}
-    else{
-      portfolio[1, equityInCluster] <- clusterW
+        covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
+        divider <- as.numeric(aalpha %*% solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                              %*% aalpha)
+        wInCluster <- t(solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                        %*% aalpha / divider)
+        totalWListInCluster <- wInCluster * clusterW
+        for (equities in 1:ncol(totalWListInCluster)){
+          portfolio[1, colnames(totalWListInCluster)[equities]] <- 
+            totalWListInCluster[1 ,colnames(totalWListInCluster)[equities]] * marketValue
+        }
     }
-    for (equities in 1:length(totalWListInCluster)){
-      portfolio[1, names(totalWListInCluster)[equities]] <- 
-        totalWListInCluster[names(totalWListInCluster)[equities]] * marketValue
+      ### comment for delete outlier
+      #else{
+      #  portfolio[1, equityInCluster] <- clusterW  * marketValue
+      #}   
+  }
+
+  ########## check risk parity among clusters
+  test <- FALSE
+  if (test) { 
+    ## inital 0 data.frame
+    covDataTest <- covDataFrame
+    for (i in 1:nrow(covDataTest)){
+      for (j in 1:ncol(covDataTest)){
+        covDataTest[i,j] <- 0
+      }
     }
+    ## impute sub-covMatrix of clusters
+    for (clusterc in 1:numCluster){
+      equityInCluster <- names(orderClusters[orderClusters == clusterc])
+      covDataTest[equityInCluster,equityInCluster] <- covDataFrame[equityInCluster,equityInCluster] 
+    }
+    
+    riskDistribution <- as.matrix(portfolio[1, portfolio != 0]) %*% as.matrix(covDataTest)
+    riskAcrossClusters <- c()
+    
+    ## print the risk of clusters
+#    for (clusterb in 1:numCluster){
+#      equityInCluster <- names(orderClusters[orderClusters == clusterb])
+#      portfolioInCluster <- as.matrix(portfolio[1,equityInCluster])
+#      risk <- sum(riskDistribution[1,equityInCluster] %*% t(portfolioInCluster))/
+#        sum(portfolioInCluster) 
+      #print(risk)
+#    }
   }
 
   ########################################### get the current return
   flush.console()
   tmp <- USReturn[i,-1]
   tmp <- exp(tmp)
+  ## treat stop board
+  tmp[is.na(tmp)] <- 1
+#  print(max(abs(portfolio)))
+#  print(sum(portfolio)/marketValue)
   todayValue <- sum(tmp * portfolio, na.rm = T)
   marketValue <- todayValue
   historyValue <- c(historyValue, marketValue)
@@ -325,6 +377,7 @@ for (i in startDate:endDate){
   title(main = paste0(as.character(nTickets), " equities, in ",
                       as.character(numCluster), " clusters"))
   Sys.sleep(.001)
+  print(USReturn[i,1]+ as.Date("1899-12-30"))
 }
 ```
 
