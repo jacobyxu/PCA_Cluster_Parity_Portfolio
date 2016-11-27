@@ -1,5 +1,9 @@
-library(Hmisc); library(xlsx); library(dplyr); library(psych)
-library(gtable); library(ggplot2); library(data.table)
+setwd("F:/mywd/riskParity/code")
+library(Hmisc); library(tidyr); library(dplyr); library(psych)
+library(gtable); library(ggplot2); library(data.table); library(caret)
+library(CVXfromR); library(vioplot); library(quadprog)
+setup.dir = "D:/Matlab/packages/cvx-w64/cvx"
+
 
 clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.999){
   
@@ -10,11 +14,12 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   ################# remove NAs for cor
   delete <- c()
   i <- 1
+  
   for (col in 1:ncol(UScorMatrix)){
     if(sum(is.na(UScorMatrix[,col])) == nrow(UScorMatrix)){
       delete[i] <- col
       i = i+1 }}
-  UScorMatrix <- UScorMatrix[-(delete),-(delete)]
+  if (length(delete) > 0) UScorMatrix <- UScorMatrix[-(delete),-(delete)]
   for (col in 1:ncol(UScorMatrix)){
     for (row in 1:nrow(UScorMatrix)){
       if (is.na(UScorMatrix[row,col]))
@@ -27,7 +32,7 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
     if(sum(is.na(UScovMatrix[,col])) == nrow(UScovMatrix)){
       delete[i] <- col
       i = i+1 }}
-  UScovMatrix <- UScovMatrix[-(delete),-(delete)]
+  if (length(delete) > 0) UScovMatrix <- UScovMatrix[-(delete),-(delete)]
   for (col in 1:ncol(UScovMatrix)){
     for (row in 1:nrow(UScovMatrix)){
       if (is.na(UScovMatrix[row,col]))
@@ -48,7 +53,7 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   corDataFrame <- data.frame(UScorMatrix)
   covDataFrame <- data.frame(UScovMatrix)
   #  covDataFrame <- data.frame(normalcovMatrix)
-  
+  formap <- corDataFrame
   ########################################## derive matrix for clustering
   
   for (i in 1:nrow(corDataFrame)){
@@ -100,7 +105,7 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   #      Sys.sleep(.09)
   #    }}
   ###################### inital heatmap
-  tmap1 <- as.matrix(corDataFrame)
+  tmap1 <- as.matrix(formap)
   map1 <- t(tmap1)
   
   ###################### clustering
@@ -111,7 +116,7 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   orderCluster <- corCluster$cluster[order(corCluster$cluster)]
   clusterSize <- corCluster$size
   nameList <- names(orderCluster)
-  newCorDataFrame <- corDataFrame[nameList,]
+  newCorDataFrame <- formap[nameList,]
   newCorDataFrame <- newCorDataFrame[,nameList]
   tmap2 <- as.matrix(newCorDataFrame)
   map2 <- t(tmap2)
@@ -136,7 +141,7 @@ rankOfMarket <- USfinal %>% filter(Date == max(Date)) %>%
   arrange(desc(Market.Cap))
 
 ######################### choose how many tickers
-nTickets <- 100
+nTickets <- 150
 ticketChoice <- rankOfMarket$Ticker[1:nTickets]
 USfinal <- USfinal %>% filter(Ticker %in% ticketChoice) %>% 
   select(-Market.Cap) %>% arrange(Date)
@@ -151,7 +156,9 @@ USOutTime <- USOut[2:nrow(USOut),1]
 USlogReturn <- log(USOutT1/USOutT)
 USReturn <- cbind(USOutTime,USlogReturn)
 USReturn[1:5,1:5]
-
+rf = 0.0162067
+rf = 0.0078
+globalUniverse = names(USReturn)
 ######################## start day
 beginning <- min(USReturn$USOutTime) + as.Date('1899-12-30')
 
@@ -162,22 +169,34 @@ beginning <- min(USReturn$USOutTime) + as.Date('1899-12-30')
 
 library(caret)
 library(stats)
-startDate <- 31
+startDate <- 128
 marketValue <- 1
-historyValue <- c(marketValue)
+historyValueMvo <- c(marketValue)
+historyValueAo <- c(marketValue)
+historyValueRp <- c(marketValue)
+historyValueCrp <- c(marketValue)
+marketValueMvo <- 1
+marketValueAo <- 1
+marketValueRp <- 1
+marketValueCrp <- 1
 portfolio <- USReturn[1,-1]
 
 change <- 0
 endDate <- nrow(USReturn)
+interval <- 1
+# endDate <- 120
 # i <- startDate+1
-for (i in startDate:endDate){
+
+numCluster <- 30
+clusterIteNum <- 500
+
+for (i in seq(from = startDate, to = endDate, by  =interval)){
   
   ########################################### build portfolio by history
-  trainset <- USReturn[1:(i-1),]
-  
+  featureStart = max(1,i-252)
+  trainset <- USReturn[featureStart:(i-1),]
   ################### Clustering
-  numCluster <- 20
-  clusterIteNum <- 500
+
   clusterResult <- clustering(trainset, numCluster, clusterIteNum)
   orderClusters <- clusterResult[[1]]
   clusterSize <- clusterResult[[2]]
@@ -217,52 +236,276 @@ for (i in startDate:endDate){
   ################### change the portfolio 3
   ## little difference from paper
   covDataFrame <- clusterResult[[3]]
-  portfolio[1,] <- 0
+
+
   
-  ##### calculate weights across clusters by variance of clusters
+
+  if ((i-startDate)%%21==0){
+    portfolio[1,] <- 0
+    pflMvo <- t(as.matrix(portfolio)); 
+    pflAo <- t(as.matrix(portfolio));
+    pflRp <- t(as.matrix(portfolio));
+    pflCrp <- t(as.matrix(portfolio));
+    #insert portfolios here
+    nUniverse = nrow(covDataFrame)
+    vec1 <- as.matrix(rep.int(1,nUniverse))
+  
+    #markovitz
+    modifiedCov <- as.matrix(covDataFrame)+(1/10000)*diag(nrow(covDataFrame))
+    
+#     invCov = solve(modifiedCov)
+#     tmp_pflMvo = (invCov%*%vec1)/as.numeric((t(vec1)%*%invCov%*%vec1))
+    dvec <- rep(0,nUniverse)
+    Amat <- cbind(1,diag(nUniverse))
+    bvec <- c(1,rep(0,nUniverse))
+    meq <- 1
+    
+    kn<-0
+    mvoFlag = 0
+    while (mvoFlag == 0){
+      tryCatch({
+        mvResult <- solve.QP(modifiedCov,dvec,Amat,bvec = bvec,meq = meq)
+        mvoFlag <- 1
+      },warning = function(w){
+        
+      },error = function(e){
+      },finally = {
+        if(mvoFlag ==0){
+          kn <- kn +1
+          modifiedCov <- modifiedCov + (2^(kn)/10000)*diag(nrow(covDataFrame))
+          mvoFlag <- 0
+        }
+      })
+    }
+    
+    mvResult$solution[mvResult$solution <=1e-5] <- 0
+    tmp_pflMvo = mvResult$solution
+  
+    #1/n
+    tmp_pflAo <- rep.int(1,nUniverse)/nUniverse
+  
+    #riskParity
+    myCov = as.matrix(covDataFrame)
+    #Number of equities
+    
+    myCov = modifiedCov+(1/10000)*diag(nrow(covDataFrame))
+  
+    myCov.eig <- eigen(myCov)
+    eigValue = myCov.eig$values
+    eigValue[eigValue<0] = 0
+    myCov.sqrt <- myCov.eig$vectors %*% diag(sqrt(eigValue)) %*% solve(myCov.eig$vectors)
+  
+    sqCov <- myCov.sqrt
+  
+    currentUniverse <- names(covDataFrame)
+    n <- nUniverse
+    #Level of 
+    c <- 2
+    
+  #                      "minimize(w'*myCov*w)",
+    cvxcode <- paste("cvx_precision low",
+                     "variables w(n)",
+                     "minimize(norm(sqCov*w))",
+                     "subject to",
+                     "geo_mean(w) >= exp(c)^(1/n)",
+                     sep=";")
+    rp <- CallCVX(cvxcode, const.vars=list(c=c, n=n,sqCov = sqCov),
+                  opt.var.names="w", setup.dir=setup.dir)
+    
+    w = as.matrix(rp$w)
+    tmp_pflRp = as.matrix(rp$w)
+    tmp_pflRp = tmp_pflRp/sum(tmp_pflRp)
+  
+    #CRP
+  #### calculate weights across clusters by variance of clusters
   V_piaoList <- c()
-  for (clusters in 1:numCluster){
-    equityInCluster <- names(orderClusters[orderClusters == clusters])
-    covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
-    if (nrow(covMatrixInCluster) > 1)
-    {diagCovMatrix <- diag(diag(covMatrixInCluster))}else{
-      diagCovMatrix <-covMatrixInCluster}
-    inverseDiagCovMatrix <- solve(diagCovMatrix)
-    w_piao <- diag(inverseDiagCovMatrix) / tr(inverseDiagCovMatrix)
-    V_piao <- as.numeric(crossprod(w_piao,covMatrixInCluster) %*% w_piao)
+  for (clustera in 1:numCluster){
+    ## for each cluster, calculate the distribution of portfolio to get minimum cluster variance
+    equityInCluster <- names(orderClusters[orderClusters == clustera])
+    aalpha <- as.vector(rep(1,length(equityInCluster)))
+    if (length(equityInCluster) > 1){
+      covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
+      divider <- as.numeric(aalpha %*% 
+                              solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster)))) 
+                            %*% aalpha)
+      wInCluster <- t(solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                      %*% aalpha / divider)
+      V_piao <- as.numeric(wInCluster %*% covMatrixInCluster %*% t(wInCluster))
+    }
+    ### Inf for delete outlier
+    else{
+      V_piao <- Inf#as.numeric(covDataFrame[equityInCluster,equityInCluster])
+    }
     V_piaoList <- c(V_piaoList,V_piao)
   }
+  
+  # distribute weights across clusters
   wAcrossCluster <- 1 / V_piaoList / sum(1 / V_piaoList)
-
-  ##### calculate weights in each clusters by variance of equities
+  
+  #### calculate weights in each clusters by covariance matrix of equities
   for (clustera in 1:numCluster){
     clusterW <- wAcrossCluster[clustera]
+    
+    ## for each cluster, calculate the distribution of portfolio to get minimum cluster variance
     equityInCluster <- names(orderClusters[orderClusters == clustera])
+    aalpha <- as.vector(rep(1,length(equityInCluster)))
+    
     if (length(equityInCluster) > 1){
-      varianceVectorInCluster <- diag(as.matrix(covDataFrame[equityInCluster,equityInCluster]))
-      wInCluster <- 1 / varianceVectorInCluster / sum(1 / varianceVectorInCluster)
-      totalWListInCluster <- clusterW * wInCluster}
-    else{
-      portfolio[1, equityInCluster] <- clusterW
+      covMatrixInCluster <- as.matrix(covDataFrame[equityInCluster,equityInCluster])
+      divider <- as.numeric(aalpha %*% solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                            %*% aalpha)
+      wInCluster <- t(solve(covMatrixInCluster + diag(rep(0.00001,length(equityInCluster))))
+                      %*% aalpha / divider)
+      totalWListInCluster <- wInCluster * clusterW
+      for (equities in 1:ncol(totalWListInCluster)){
+        pflCrp[colnames(totalWListInCluster)[equities],] <- 
+          totalWListInCluster[1 ,colnames(totalWListInCluster)[equities]]
+      }
     }
-    for (equities in 1:length(totalWListInCluster)){
-      portfolio[1, names(totalWListInCluster)[equities]] <- 
-        totalWListInCluster[names(totalWListInCluster)[equities]] * marketValue
+
+  }
+    #HRP
+  
+    for (j in 1:nUniverse){
+      if(currentUniverse[j] %in% globalUniverse){
+        pflMvo[currentUniverse[j],] <-tmp_pflMvo[j]
+        pflAo[currentUniverse[j],] <-tmp_pflAo[j]
+        pflRp[currentUniverse[j],] <-tmp_pflRp[j]
+      }else{
+        #do nothing
+      }
     }
   }
-  
   ########################################### get the current return
   flush.console()
-  tmp <- USReturn[i,-1]
+  tmp <- USReturn[i:(i+interval-1),-1]
   tmp <- exp(tmp)
-  todayValue <- sum(tmp * portfolio, na.rm = T)
-  marketValue <- todayValue
-  historyValue <- c(historyValue, marketValue)
+  tmp[is.na(tmp)] <- 1
+#   todayValue <- sum(tmp * portfolio, na.rm = T)
+#   marketValue <- todayValue
+  historyValueMvo <- c(historyValueMvo, marketValueMvo * rowSums(tmp * pflMvo, na.rm = T))
+  marketValueMvo <- historyValueMvo[length(historyValueMvo)]
+#   print(rowSums(tmp * pflMvo, na.rm = T))
   
-  ################## plot
-  time <- (startDate-1):i
-  plot(time,historyValue,type = 'l')
-  title(main = paste0(as.character(nTickets), " equities, in ",
-                      as.character(numCluster), " clusters"))
-  Sys.sleep(.001)
+  historyValueAo <- c(historyValueAo, marketValueAo * rowSums(tmp * pflAo, na.rm = T))
+  marketValueAo <- historyValueAo[length(historyValueAo)]
+  historyValueRp <- c(historyValueRp, marketValueRp*rowSums(tmp * pflRp, na.rm = T))
+  marketValueRp <- historyValueRp[length(historyValueRp)]
+  historyValueCrp <- c(historyValueCrp, marketValueCrp * rowSums(tmp * pflCrp, na.rm = T))
+  marketValueCrp <- historyValueCrp[length(historyValueCrp)]
+  
+  
+################## plot
+cl = c("cadetblue3","chartreuse3","brown3","darkgoldenrod3")
+time <- (startDate-1):i
+
+plot(startDate,1,xlim = c(startDate-1,i),ylim = c(0.70,max(marketValueMvo,marketValueAo,marketValueRp,marketValueCrp)),type = 'n')
+lines(time,historyValueMvo,col = cl[1],type = 'l')
+lines(time,historyValueAo,col = cl[2],type = 'l')
+lines(time,historyValueRp,col = cl[3],type = 'l')
+lines(time,historyValueCrp,col = cl[4],type = 'l')
+legend("topleft", legend = c("MV Portfolio","1/n Portfolio","Risk Parity Portfolio","Cluster Risk Parity"), col=cl, pch=1)
+title(main = paste0(as.character(nTickets), " equities, in ",
+                    as.character(numCluster), " clusters"))
+
+
+#   Sys.sleep(.0001)
 }
+
+strategyList = c('MV','1/n','RP','CRP')
+N = length(historyValueRp)
+# N = 800
+stdMvo = sd(log(historyValueMvo[1:N]),na.rm=F)*sqrt(252/N)
+stdAo = sd(log(historyValueAo[1:N]),na.rm=F)*sqrt(252/N)
+stdRp = sd(log(historyValueRp[1:N]),na.rm=F)*sqrt(252/N)
+stdCrp = sd(log(historyValueCrp[1:N]),na.rm=F)*sqrt(252/N)
+
+
+
+muMvo = log(historyValueMvo[N])*252/N
+muAo = log(historyValueAo[N])*252/N
+muRp = log(historyValueRp[N])*252/N
+muCrp = log(historyValueCrp[N])*252/N
+
+sharpMvo = (muMvo-rf)/stdMvo
+sharpAo = (muAo-rf)/stdAo
+sharpRp = (muRp-rf)/stdRp
+sharpCrp = (muCrp-rf)/stdCrp
+
+rcMvo = tmp_pflMvo*(myCov %*% tmp_pflMvo)
+rcAo = tmp_pflAo*(myCov %*% tmp_pflAo)
+rcRp = tmp_pflRp*(myCov %*% tmp_pflRp)
+rcCrp = matrix(pflCrp)*(myCov %*% matrix(pflCrp))
+
+print(c(muMvo,stdMvo,sharpMvo,sd(rcMvo)))
+print(c(muAo,stdAo,sharpAo,sd(rcAo)))
+print(c(muRp,stdRp,sharpRp,sd(rcRp)))
+print(c(muCrp,stdCrp,sharpCrp,sd(rcCrp)))#
+
+par(mfrow = c(2,2)) 
+ymin1 = min(c(abs(rcMvo),abs(rcAo),abs(rcRp),abs(rcCrp)))
+ymax1 = max(c(abs(rcMvo),abs(rcAo),abs(rcRp),abs(rcCrp)))
+ylim1 = c(ymin1,ymax1)
+# vioplot(abs(rcMvo),abs(rcAo),abs(rcRp),abs(rcCrp),names = c("MV","1/n","RP","CRP"),col = "antiquewhite1")
+barplot(abs(rcMvo),main = "MV portfolio",beside = T,axes = F, col = cl[1],ylim = ylim1)
+barplot(abs(rcAo),main = "1/n portfolio",beside = T,axes = F, col = cl[2],ylim = ylim1)
+barplot(abs(rcRp),main = "Risk Parity portfolio",beside = T,axes = F, col = cl[3],ylim = ylim1)
+barplot(abs(rcCrp),main = "Cluster Risk Parity portfolio",beside = T,axes = F, col =cl[4],ylim = ylim1)
+
+par(mfrow = c(2,2))
+ymin2 = min(c(abs(pflMvo)/sum(abs(pflMvo)),abs(pflAo)/sum(abs(pflAo)),abs(pflRp)/sum(abs(pflRp)),abs(pflCrp)/sum(abs(pflCrp))))
+ymax2 = max(c(abs(pflMvo)/sum(abs(pflMvo)),abs(pflAo)/sum(abs(pflAo)),abs(pflRp)/sum(abs(pflRp)),abs(pflCrp)/sum(abs(pflCrp))))
+ylim2 = c(ymin2,ymax2)
+barplot(abs(pflMvo)/sum(abs(pflMvo)),main = "MV portfolio",beside = T, axes = F, col = cl[1],ylim = ylim2)
+barplot(abs(pflAo)/sum(abs(pflAo)),main = "1/n portfolio",beside = T, axes = F, col = cl[2],ylim = ylim2)
+barplot(abs(pflRp)/sum(abs(pflRp)),main = "Risk Parity portfolio",beside = T,axes = F, col = cl[3],ylim = ylim2)
+barplot(abs(pflCrp)/sum(abs(pflCrp)),main = "Cluster Risk Parity portfolio",beside = T,axes = F, col = cl[4],ylim = ylim2)
+
+#====================================================================
+window = c(1,741+252*4);N = window[2]-window[1]+1
+cl = c("cadetblue3","chartreuse3","brown3","darkgoldenrod3")
+recTable = rbind(historyValueMvo,historyValueAo,historyValueRp,historyValueCrp)
+time <- (startDate-1+window[1]):(startDate-1+window[2])
+stat = c()
+
+par(mfrow = c(2,2))
+plot(time[1],1,xlim = c(time[1],time[length(time)]),ylim = c(0.50,3),xlab = "Time",ylab = "Return",type = 'n')
+Axis(side=2, labels=FALSE)
+for (i in 1:nrow(recTable)){
+  valRec <- recTable[i,window[1]:window[2]]/recTable[i,window[1]]
+  lines(time,valRec, col=cl[i],type = 'l')
+  mu = log(valRec[N])*252/N
+  vol = sd(log(valRec),na.rm=F)*sqrt(252/N)
+  sharpe = (mu-rf)/vol
+  stat = rbind(stat,c(mu,vol,sharpe))
+}
+legend("topleft", legend = strategyList, col=cl, pch=1)
+title(sub = "Profit and loss curve",outer = F) #sub = paste0(as.character(nTickets), " equities, in ",as.character(numCluster), " clusters"),
+
+plot(startDate,1,xlim = c(time[1],time[length(time)]),ylim = c(0.80,1.3),xlab = "Time",ylab = "Net Change in Return",type = 'n')
+Axis(side=2, labels=FALSE)
+for (i in 1:nrow(recTable)){
+  valRec <- recTable[i,window[1]:window[2]]/recTable[i,window[1]]
+  lines(time[2:length(time)],valRec[2:length(valRec)]/valRec[1:length(valRec)-1], col=cl[i],type = 'l')
+}
+legend("topright",cex - 0.8,legend = strategyList, col=cl, pch=1)
+title(sub = "Net Change in P/L")
+
+plot(1,0,xlim = c(1,4),ylim = c(-0.3,0.3),xaxt='n',xlab = "Approaches",ylab = "Mean Return and CI",type = 'n')
+Axis(side=2, labels=FALSE)
+arrows(1:4,stat[,1]-stat[,2],1:4,stat[,1]+stat[,2],code=3,length=0.2,angle=90,col='black')
+points(1:4,stat[,1],pch=19,col = cl,cex = 1.5)
+axis(1, at=1:4, labels=strategyList)
+legend("bottomleft", legend = strategyList, col=cl, pch=1)
+title(sub = "Mean Return and Confident Interval")
+
+plot(1,0,xlim = c(0.06,0.12),ylim = c(0.02,0.1),xlab = "Return",ylab = "Volatility",type = 'n')
+points(stat[,1],stat[,2],col = cl,cex = 2, pch = 19)
+Axis(side=2, labels=T)
+legend("bottomright", legend = strategyList, col=cl, pch=19)
+
+statDF = data.frame(stat)
+row.names(statDF) = strategyList
+names(statDF) = c('Return','Vol','Sharpe')
+print(statDF)
+
