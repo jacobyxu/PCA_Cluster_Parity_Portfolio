@@ -1,7 +1,96 @@
-library(Hmisc); library(xlsx); library(dplyr); library(psych)
-library(gtable); library(ggplot2); library(data.table); #library(quadprog)
-rm(list = ls())
+---
+title: "PCA-Cluster ParityToolkit"
+output: md_document
+---
 
+
+```{r, message=FALSE, results='hide'}
+#setwd("/home/creatrol/GHack")
+library(Hmisc); library(xlsx); library(dplyr); library(gtable); library(ggplot2); library(data.table)
+```
+
+## Load raw data and transformation considering currencies
+
+```{r, warning=FALSE,message=FALSE}
+if (FALSE){
+  ############################################# Load data
+  Equities_data <- read.csv('data/Equities_data.csv',1)
+  Equities_metadata <- read.csv('data/Equities_metadata.csv',1)
+  Currencies_data <- read.csv('data/Currencies_data.csv',1)
+  Currencies_metadata <- read.csv('data/Currencies_metadata.csv',1)
+  
+  ######################### select open price as daily price & join datasets
+  Edata <- select(Equities_data, 1:3,8)
+  rm(Equities_data)
+  EdataM <- select(Equities_metadata, 1,3)
+  Cdata <- select(Currencies_data,1:3)
+  CdataM <- select(Currencies_metadata,1,3)
+  semiData <- left_join(Edata, EdataM)
+  
+  ######################### treat date
+  semiData$Date <- as.numeric(
+    as.Date(as.character(semiData$Date), origin = '1899-12-30') - as.Date('1899-12-30'))
+  semiCurrencies <- left_join(Cdata, CdataM)
+  semiCurrencies$Date <- as.numeric(
+    as.Date(as.character(semiCurrencies$Date), origin = '1899-12-30') - as.Date('1899-12-30'))
+  semiCurrencies <- semiCurrencies %>% rename(Rate = Open)%>%select(-1)
+  
+  ######################## use data.table to realize rolling for missing data
+  semiCurrenciesTable <- data.table(semiCurrencies)
+  rm(semiCurrencies)
+  semiDataTable <- data.table(semiData)
+  rm(semiData)
+  setkey(semiCurrenciesTable, CRNCY, Date)
+  setkey(semiDataTable, CRNCY, Date)
+  mydata <- semiCurrenciesTable[semiDataTable, roll = +Inf]
+  myData <- data.frame(mydata)
+  rm(mydata)
+  
+  ######################### focus on US market
+  myData <- myData %>% mutate(Rate2 = ifelse(grepl("_US_",as.character(Ticker)),1,Rate)) %>% 
+    mutate(Price = Open/Rate2) %>%
+    select(Ticker, Price, Date, Market.Cap)
+  finalOut <- myData[complete.cases(myData),]
+  USfinal <- finalOut[grepl("_US_",as.character(finalOut$Ticker)),]
+  
+  ######################### save data
+  save(USfinal, file = "USfinal.RData")
+  head(USfinal, 5)
+  rm(list = ls())
+}
+```
+
+
+### using logathemic return
+```{r, warning=FALSE}
+load("USfinal.RData")
+rankOfMarket <- USfinal %>% filter(Date == max(Date)) %>% 
+  arrange(desc(Market.Cap))
+
+######################### choose how many tickers
+nTickets <- 150
+ticketChoice <- rankOfMarket$Ticker[1:nTickets]
+USfinal <- USfinal %>% filter(Ticker %in% ticketChoice) %>% 
+  select(-Market.Cap) %>% arrange(Date)
+library(tidyr)
+USOut <- spread(USfinal, Ticker,Price)
+#USOut[complete.cases(USOut),]
+
+######################### derive log return
+USOutT1 <- USOut[2:nrow(USOut),-1]
+USOutT <- USOut[1:(nrow(USOut)-1),-1]
+USOutTime <- USOut[2:nrow(USOut),1]
+USlogReturn <- log(USOutT1/USOutT)
+USReturn <- cbind(USOutTime,USlogReturn)
+USReturn[1:5,1:5]
+
+######################## start day
+beginning <- min(USReturn$USOutTime) + as.Date('1899-12-30')
+```
+
+## Build Clustering Function
+
+```{r, warning=FALSE,message=FALSE}
 clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.999){
   
   ############################################ derive cor & cov
@@ -34,17 +123,6 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
       if (is.na(UScovMatrix[row,col]))
         UScovMatrix[row,col] <- 0 }}
   
-  ################## normalize the cov Matrix
-  #  outlierLine <- as.numeric(quantile(UScovMatrix,removeOutliers))
-  #  maxcov <- max(UScovMatrix, na.rm = TRUE)
-  #  mincov <- min(UScovMatrix, na.rm = TRUE)
-  #  normalcovMatrix <- (UScovMatrix - mincov) / (outlierLine - mincov)
-  #  for (i in 1:NROW(normalcovMatrix)){
-  #    for (j in 1:NCOL(normalcovMatrix)){
-  #      if (normalcovMatrix[i,j] > 1){
-  #        normalcovMatrix[i,j] <- 1
-  #  }}}
-  
   ################# change the data storage type
   corDataFrame <- data.frame(UScorMatrix)
   covDataFrame <- data.frame(UScovMatrix)
@@ -68,38 +146,6 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   kcenters <- corDataFrame[centersNames, ]
   set.seed(2016)
   
-  ###################### plot heatmap by ggplot
-  #  corDataFramePlot <- corDataFrame
-  #  corDataFramePlot$Name <- row.names(corDataFramePlot)
-  #  corDataFrame.m <- melt(corDataFramePlot)
-  #flush.console()
-  #  g <- ggplot(data = corDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
-  #    theme(axis.text = element_blank(), axis.title = element_blank())+
-  #      scale_fill_gradient(low = "white", high = "red")
-  #  print(g)
-  #  Sys.sleep(.09)
-  
-  ###################### Clustering
-  #  for (i in 1:clusterIteNum){
-  
-  #    corCluster <- kmeans(corDataFrame, centers=kcenters, iter.max=1)
-  #    kcenters <- data.frame(corCluster$centers)
-  
-  ####################### reorder matrix
-  #    orderCluster <- corCluster$cluster[order(corCluster$cluster)]
-  #    nameList <- names(orderCluster)
-  #    newCorDataFrame <- corDataFrame[nameList,nameList]
-  
-  #    if (i == clusterIteNum){
-  ###################### plot heatmap
-  #      newCorDataFrame$Name <- row.names(newCorDataFrame)
-  #      newCorDataFrame.m <- melt(newCorDataFrame)
-  #flush.console()
-  #      g <- ggplot(data = newCorDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
-  #        theme(axis.text = element_blank(), axis.title = element_blank())
-  #      print(g)
-  #      Sys.sleep(.09)
-  #    }}
   ###################### inital heatmap
   tmap1 <- as.matrix(formap)
   map1 <- t(tmap1)
@@ -116,51 +162,14 @@ clustering <- function(dataset, numCluster, clusterIteNum, removeOutliers = 0.99
   newCorDataFrame <- newCorDataFrame[,nameList]
   tmap2 <- as.matrix(newCorDataFrame)
   map2 <- t(tmap2)
-  
-  #   ####################### plot heatmap by ggplot
-  #    newCorDataFrame$Name <- nameList #row.names(newCorDataFrame)
-  #    newCorDataFrame.m <- melt(newCorDataFrame)
-  #flush.console()
-  #    g <- ggplot(data = newCorDataFrame.m, aes(x=Name, y=variable, fill=value)) + geom_tile() +
-  #        theme(axis.text = element_blank(), axis.title = element_blank())+
-  #      scale_fill_gradient(low = "white", high = "red")
-  #    print(g)
-  
+
   return(list(orderCluster, clusterSize, covDataFrame, map1, map2))
 }
+```
 
+# back test
 
-#############################################################################################
-
-load("USfinal.RData")
-rankOfMarket <- USfinal %>% filter(Date == max(Date)) %>% 
-  arrange(desc(Market.Cap))
-
-######################### choose how many tickers
-nTickets <- 150
-ticketChoice <- rankOfMarket$Ticker[1:nTickets]
-USfinal <- USfinal %>% filter(Ticker %in% ticketChoice) %>% 
-  select(-Market.Cap) %>% arrange(Date)
-library(tidyr)
-USOut <- spread(USfinal, Ticker,Price)
-#USOut[complete.cases(USOut),]
-
-######################### derive log return
-USOutT1 <- USOut[2:nrow(USOut),-1]
-USOutT <- USOut[1:(nrow(USOut)-1),-1]
-USOutTime <- USOut[2:nrow(USOut),1]
-USlogReturn <- log(USOutT1/USOutT)
-USReturn <- cbind(USOutTime,USlogReturn)
-USReturn[1:5,1:5]
-
-######################## start day
-beginning <- min(USReturn$USOutTime) + as.Date('1899-12-30')
-
-
-
-
-###########################################################################  backtest
-
+```{r}
 library(caret)
 library(stats)
 startDate <- 128
@@ -187,38 +196,7 @@ for (i in startDate:endDate){
     clusterSize <- clusterResult[[2]]
     
     
-    ################### change the portfolio 1
-    ## randomly choose one equity from each cluster and ditribute the value equally
-    #  chosenEquity <- c()
-    #  for (equity in 1:numCluster){
-    #    chosenEquity <- c(chosenEquity, 
-    #                      names(orderClusters[orderClusters == equity])[1])
-    #  }
-    #  for (e in 1: ncol(portfolio)){
-    #    if (names(portfolio)[e] %in% chosenEquity){
-    # distribute current market value among portfolio
-    #      portfolio[1,e] <- 1 / length(chosenEquity)
-    #    }else{
-    #      portfolio[1,e] <- 0 
-    #    }
-    #  }
-    ################## record change of portfolio
-    # change <- length(setdiff(chosenEquity,chosenEquityB))
-    # chosenEquityB <- chosenEquity 
-    # print(setdiff(chosenEquity,chosenEquityB))
-    # print(i)
-    # print(change)
-    
-    
-    ################### change the portfolio 2 - (200-40)
-    ## ditribute the value equally across the clusters and among in each clusters
-    #  portfolio[1,] <- 0
-    #  for (equity in 1: length(orderClusters)){
-    #    portfolio[1, names(orderClusters)[equity]] <- 
-    #      1 / numCluster / clusterSize[as.numeric(orderClusters[equity])]
-    #  }
-    
-    ################### change the portfolio 3
+    ################### change the portfolio
     ## real reasonable portfolio
     covDataFrame <- clusterResult[[3]]
     portfolio[1,] <- 0
@@ -268,10 +246,7 @@ for (i in startDate:endDate){
               totalWListInCluster[1 ,colnames(totalWListInCluster)[equities]]
           }
       }
-        ### comment for delete outlier
-        #else{
-        #  portfolio[1, equityInCluster] <- clusterW
-        #}   
+  
     }
   
     ########## check risk parity among clusters
@@ -293,14 +268,6 @@ for (i in startDate:endDate){
       riskDistribution <- as.matrix(portfolio[1, portfolio != 0]) %*% as.matrix(covDataTest)
       riskAcrossClusters <- c()
       
-      ## print the risk of clusters
-  #    for (clusterb in 1:numCluster){
-  #      equityInCluster <- names(orderClusters[orderClusters == clusterb])
-  #      portfolioInCluster <- as.matrix(portfolio[1,equityInCluster])
-  #      risk <- sum(riskDistribution[1,equityInCluster] %*% t(portfolioInCluster))/
-  #        sum(portfolioInCluster) 
-        #print(risk)
-  #    }
     }
   }
   updateOrNor <- updateOrNor + 1
@@ -311,17 +278,20 @@ for (i in startDate:endDate){
   ## treat stop board
   tmp[is.na(tmp)] <- 1
 #  print(max(abs(portfolio)))
-  print(sum(portfolio))
+  #print(sum(portfolio))
   todayValue <- sum(tmp * portfolio, na.rm = T) * marketValue
   marketValue <- todayValue
   historyValue <- c(historyValue, marketValue)
   
   ################## plot
   time <- (startDate-1):i
-  plot(time,historyValue,type = 'l')
-  title(main = paste0(as.character(nTickets), " equities, in ",
-                      as.character(numCluster), " clusters"))
-  Sys.sleep(.001)
-  print(USReturn[i,1]+ as.Date("1899-12-30"))
+
+  #Sys.sleep(.001)
+  #print(USReturn[i,1]+ as.Date("1899-12-30"))
 }
+plot(time,historyValue,type = 'l')
+title(main = paste0(as.character(nTickets), " equities, in ",
+                    as.character(numCluster), " clusters"))
 # save(historyValue, file = "historyValue.RData")
+```
+
